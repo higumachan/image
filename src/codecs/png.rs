@@ -230,13 +230,12 @@ pub struct ApngDecoder<R: BufRead + Seek> {
     /// The dispose op of the current frame.
     dispose: DisposeOp,
 
+    /// The region to dispose of the previous frame.
     dispose_region: Option<(u32, u32, u32, u32)>,
     /// The number of image still expected to be able to load.
     remaining: u32,
     /// The next (first) image is the thumbnail.
     has_thumbnail: bool,
-
-    frame_idx: usize,
 }
 
 impl<R: BufRead + Seek> ApngDecoder<R> {
@@ -258,7 +257,6 @@ impl<R: BufRead + Seek> ApngDecoder<R> {
             dispose_region: None,
             remaining,
             has_thumbnail,
-            frame_idx: 0,
         }
     }
 
@@ -317,8 +315,6 @@ impl<R: BufRead + Seek> ApngDecoder<R> {
 
         // Dispose of the previous frame.
 
-        dbg!(self.frame_idx, &self.dispose);
-
         match self.dispose {
             DisposeOp::None => {
                 previous.clone_from(current);
@@ -328,6 +324,7 @@ impl<R: BufRead + Seek> ApngDecoder<R> {
                 if let Some((px, py, width, height)) = self.dispose_region {
                     let mut region_current = current.sub_image(px, py, width, height);
 
+                    // FIXME: This is a workaround for the fact that `pixels_mut` is not implemented
                     let pixels: Vec<_> = region_current.pixels().collect();
 
                     for (x, y, pixel) in &pixels {
@@ -341,7 +338,7 @@ impl<R: BufRead + Seek> ApngDecoder<R> {
                 }
             }
             DisposeOp::Previous => {
-                let (px, py, width, height) = self.dispose_region.unwrap();
+                let (px, py, width, height) = self.dispose_region.expect("The first frame must not set dispose=Previous");
                 let region_previous = previous.sub_image(px, py, width, height);
                 current.copy_from(&region_previous.to_image(), px, py).unwrap();
             }
@@ -383,7 +380,6 @@ impl<R: BufRead + Seek> ApngDecoder<R> {
                 self.dispose = fc.dispose_op;
             }
         };
-        dbg!((width, height, px, py, blend));
 
         self.dispose_region = Some((px, py, width, height));
 
@@ -412,8 +408,6 @@ impl<R: BufRead + Seek> ApngDecoder<R> {
         // We've converted the raw frame to RGBA8 and disposed of the original allocation
         limits.free_usize(raw_frame_size);
 
-        source.save(format!("frame_buffer_{}.png", self.frame_idx)).unwrap();
-
         match blend {
             BlendOp::Source => {
                 current
@@ -431,8 +425,6 @@ impl<R: BufRead + Seek> ApngDecoder<R> {
         // Ok, we can proceed with actually remaining images.
         self.remaining = remaining;
         // Return composited output buffer.
-
-        self.frame_idx += 1;
 
         Ok(Some(self.current.as_ref().unwrap()))
     }
